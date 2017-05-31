@@ -795,10 +795,10 @@ func (s *S) TestTxnQueueGrowth(c *C) {
 	// nonces because we didn't get to the point of our nonce winning the 'prepared' battle.
 	// Are they getting re-ordered?
 	// things that don't get to 'prepared' don't get filed away as 'predecessors'.
-	/// txn.SetChaos(txn.Chaos{
-	/// 	KillChance: 1,
-	/// 	Breakpoint: "set-applying",
-	/// })
+	txn.SetChaos(txn.Chaos{
+		KillChance: 1,
+		Breakpoint: "set-applying",
+	})
 	const N = 1000
 	ops := []txn.Op{{
 		C:      "accounts",
@@ -807,8 +807,8 @@ func (s *S) TestTxnQueueGrowth(c *C) {
 	}}
 	for n := 0; n < N; n++ {
 		err = s.runner.Run(ops, "", nil)
-		c.Assert(err, IsNil)
-		/// c.Assert(err, Equals, txn.ErrChaos)
+		/// c.Assert(err, IsNil)
+		c.Assert(err, Equals, txn.ErrChaos)
 	}
 	var qdoc txnQueue
 	err = s.accounts.FindId(0).One(&qdoc)

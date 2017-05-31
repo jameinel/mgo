@@ -500,6 +500,7 @@ func (f *flusher) rescan(t *transaction, force bool) (revnos []int64, err error)
 				break
 			}
 		}
+		// f.queue[dkey] = tokensWithIds(info.Queue, &RescanUpdatedQueue)
 		existQ, qok := f.queue[dkey]
 		if !qok {
 			atomic.AddUint64(&RescanNoQueue, 1)
@@ -978,7 +979,7 @@ func tokensToPull(dqueue []tokenAndId, pull map[bson.ObjectId]*transaction, dont
 		if dtt.tt == dontPull {
 			continue
 		}
-		if _, ok := pull[dtt.bid]; ok {
+		if _, ok := pull[dtt.id()]; ok {
 			// It was handled before and this is a leftover invalid
 			// nonce in the queue. Cherry-pick it out.
 			result = append(result, dtt.tt)
