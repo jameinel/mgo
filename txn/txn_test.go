@@ -762,7 +762,7 @@ func (s *S) TestTxnQueueStressTest(c *C) {
 			defer wg.Done()
 			for i := 0; i < changes; i++ {
 				err = s.runner.Run(ops[n%2], "", nil)
-				c.Assert(err, IsNil)
+				c.Check(err, IsNil)
 			}
 		}()
 	}
@@ -775,4 +775,54 @@ func (s *S) TestTxnQueueStressTest(c *C) {
 			c.Errorf("Account should have balance of %d, got %d", runners*changes, account.Balance)
 		}
 	}
+}
+
+type txnQueue struct {
+	Queue []string `bson:"txn-queue"`
+}
+
+func (s *S) TestTxnQueueGrowth(c *C) {
+	txn.SetDebug(false) // too much spam
+	err := s.accounts.Insert(M{"_id": 0, "balance": 0})
+	c.Assert(err, IsNil)
+	// Create many assertion only transactions.
+	t := time.Now()
+	// Setting no breakpoint makes the test set up take 33s to fully apply the 1000 txns.
+	// Setting the breakpoint at 'set-prepared' makes setup take 1.0s, but causes a failure
+	// because the final txn queue ends up being 2001 items, instead of just 1.
+	// (presumably we have to re-apply all of the assertion docs with new
+	// nonces because we didn't get to the point of our nonce winning the 'prepared' battle.
+	// Are they getting re-ordered?
+	txn.SetChaos(txn.Chaos{
+		KillChance: 1,
+		Breakpoint: "set-applying",
+	})
+	const N = 1000
+	ops := []txn.Op{{
+		C:      "accounts",
+		Id:     0,
+		Assert: M{"balance": 0},
+	}}
+	for n := 0; n < N; n++ {
+		err = s.runner.Run(ops, "", nil)
+		c.Assert(err, Equals, txn.ErrChaos)
+	}
+	var qdoc txnQueue
+	err = s.accounts.FindId(0).One(&qdoc)
+	c.Assert(err, IsNil)
+	c.Check(len(qdoc.Queue), Equals, N)
+	c.Logf("took %v to set up %d assertions", time.Since(t), N)
+	t = time.Now()
+	txn.SetChaos(txn.Chaos{})
+	ops = []txn.Op{{
+		C:      "accounts",
+		Id:     0,
+		Update: M{"$inc": M{"balance": 100}},
+	}}
+	err = s.runner.Run(ops, "", nil)
+	c.Assert(err, IsNil)
+	c.Check(nil, NotNil, Commentf("N: %d, applied txn in %v", N, time.Since(t)))
+	err = s.accounts.FindId(0).One(&qdoc)
+	c.Assert(err, IsNil)
+	c.Check(len(qdoc.Queue), Equals, 1)
 }
