@@ -3,6 +3,8 @@ package txn_test
 import (
 	"flag"
 	"fmt"
+	// 	"os"
+	// 	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -795,11 +797,15 @@ func (s *S) TestTxnQueueGrowth(c *C) {
 	// nonces because we didn't get to the point of our nonce winning the 'prepared' battle.
 	// Are they getting re-ordered?
 	// things that don't get to 'prepared' don't get filed away as 'predecessors'.
-	txn.SetChaos(txn.Chaos{
-		KillChance: 1,
-		Breakpoint: "set-applying",
-	})
-	const N = 1000
+	initTL := atomic.LoadUint64(&txn.TxnLoadCalls)
+	const N = 2000
+	const useChaos = false
+	if useChaos {
+		txn.SetChaos(txn.Chaos{
+			KillChance: 1,
+			Breakpoint: "set-applying",
+		})
+	}
 	ops := []txn.Op{{
 		C:      "accounts",
 		Id:     0,
@@ -807,14 +813,19 @@ func (s *S) TestTxnQueueGrowth(c *C) {
 	}}
 	for n := 0; n < N; n++ {
 		err = s.runner.Run(ops, "", nil)
-		/// c.Assert(err, IsNil)
-		c.Assert(err, Equals, txn.ErrChaos)
+		if useChaos {
+			c.Assert(err, Equals, txn.ErrChaos)
+		} else {
+			c.Assert(err, IsNil)
+		}
 	}
 	var qdoc txnQueue
 	err = s.accounts.FindId(0).One(&qdoc)
 	c.Assert(err, IsNil)
 	c.Check(len(qdoc.Queue), Equals, N)
-	fmt.Printf("\ntook %v to set up %d assertions\n", time.Since(t), N)
+	fmt.Printf("\ntook %v to set up %d assertions %d loads\n", time.Since(t), N,
+		atomic.LoadUint64(&txn.TxnLoadCalls)-initTL,
+	)
 	t = time.Now()
 	txn.SetChaos(txn.Chaos{})
 	ops = []txn.Op{{
@@ -831,19 +842,26 @@ func (s *S) TestTxnQueueGrowth(c *C) {
 	initRQ := atomic.LoadUint64(&txn.RescanDiffQueue)
 	initRNQ := atomic.LoadUint64(&txn.RescanNoQueue)
 	initRTC := atomic.LoadUint64(&txn.RescanTokenCount)
+	initTL = atomic.LoadUint64(&txn.TxnLoadCalls)
+	// f, err := os.Create("apply.pprof")
+	// c.Assert(err, IsNil)
+	// defer f.Close()
+	// pprof.StartCPUProfile(f)
 	err = s.runner.Run(ops, "", nil)
+	// pprof.StopCPUProfile()
 	c.Assert(err, IsNil)
-	fmt.Printf("N: %d, applied txn in %v w/ %d id() lookups, fastpath:%d found:%d found matching:%d rescan:%d rescan matched:%d newQ:%d rescan count:%d no q:%d\n\n",
+	fmt.Printf("N: %d, applied txn in %v w/ %d id() lookups, fastpath:%d found:%d found matching:%d rescan:%d rescan matched:%d newQ:%d rescan count:%d no q:%d txn loads: %d\n\n",
 		N, time.Since(t),
-		atomic.LoadUint64(&txn.TokenIdCounter) - initial,
-		atomic.LoadUint64(&txn.FastPathReloadQueueIds) - initFP,
-		atomic.LoadUint64(&txn.FoundTokenAlready) - initFT,
-		atomic.LoadUint64(&txn.FoundMatchingToken) - initFM,
-		atomic.LoadUint64(&txn.RescanUpdatedQueue) - initRS,
-		atomic.LoadUint64(&txn.RescanMatchingToken) - initRM,
-		atomic.LoadUint64(&txn.RescanDiffQueue) - initRQ,
-		atomic.LoadUint64(&txn.RescanTokenCount) - initRTC,
-		atomic.LoadUint64(&txn.RescanNoQueue) - initRNQ,
+		atomic.LoadUint64(&txn.TokenIdCounter)-initial,
+		atomic.LoadUint64(&txn.FastPathReloadQueueIds)-initFP,
+		atomic.LoadUint64(&txn.FoundTokenAlready)-initFT,
+		atomic.LoadUint64(&txn.FoundMatchingToken)-initFM,
+		atomic.LoadUint64(&txn.RescanUpdatedQueue)-initRS,
+		atomic.LoadUint64(&txn.RescanMatchingToken)-initRM,
+		atomic.LoadUint64(&txn.RescanDiffQueue)-initRQ,
+		atomic.LoadUint64(&txn.RescanTokenCount)-initRTC,
+		atomic.LoadUint64(&txn.RescanNoQueue)-initRNQ,
+		atomic.LoadUint64(&txn.TxnLoadCalls)-initTL,
 	)
 	err = s.accounts.FindId(0).One(&qdoc)
 	c.Assert(err, IsNil)

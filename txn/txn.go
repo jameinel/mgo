@@ -454,8 +454,11 @@ func (r *Runner) PurgeMissing(collections ...string) error {
 	return nil
 }
 
+var TxnLoadCalls uint64
+
 func (r *Runner) load(id bson.ObjectId) (*transaction, error) {
 	var t transaction
+	atomic.AddUint64(&TxnLoadCalls, 1)
 	err := r.tc.FindId(id).One(&t)
 	if err == mgo.ErrNotFound {
 		return nil, fmt.Errorf("cannot find transaction %s", id)

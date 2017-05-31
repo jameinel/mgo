@@ -239,7 +239,6 @@ var RescanDiffQueue uint64
 var RescanTokenCount uint64
 var RescanNoQueue uint64
 
-
 // prepare injects t's id onto txn-queue for all affected documents
 // and collects the current txn-queue and txn-revno values during
 // the process. If the prepared txn-queue indicates that there are
