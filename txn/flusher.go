@@ -26,6 +26,14 @@ type tokenAndId struct {
 	id bson.ObjectId
 }
 
+func (tid tokenAndId) GoString() string {
+	return string(tid.tt)
+}
+
+func (tid tokenAndId) String() string {
+	return string(tid.tt)
+}
+
 type flusher struct {
 	*Runner
 	goal     *transaction
@@ -65,6 +73,9 @@ func (f* flusher) runGraph(seen map[bson.ObjectId]*transaction) (err error) {
 		for i := 0; i < len(dqueue); i++ {
 			p := dqueue[i]
 			pred, predid := p.tt, p.id
+			if p.id != p.tt.id() {
+				panic(fmt.Sprintf("%s => %v did not create %v", p.tt, p.tt.id(), p.id))
+			}
 			predt := seen[predid]
 			if predt == nil || predt.Nonce != pred.nonce() {
 				continue
@@ -77,6 +88,9 @@ func (f* flusher) runGraph(seen map[bson.ObjectId]*transaction) (err error) {
 			for j := i + 1; j < len(dqueue); j++ {
 				s := dqueue[i]
 				succ, succid := s.tt, s.id
+				if s.id != s.tt.id() {
+					panic(fmt.Sprintf("%s => %v did not create %v", s.tt, s.tt.id(), s.id))
+				}
 				succt := seen[succid]
 				if succt == nil || succt.Nonce != succ.nonce() {
 					continue
@@ -146,6 +160,9 @@ func (f *flusher) recurse(t *transaction, seen map[bson.ObjectId]*transaction) e
 	for _, dkey := range t.docKeys() {
 		for _, dtt := range f.queue[dkey] {
 			id := dtt.id
+			if id != dtt.tt.id() {
+				panic(fmt.Sprintf("%s => %v did not create %v", dtt.tt, dtt.tt.id(), id))
+			}
 			if seen[id] != nil {
 				continue
 			}
@@ -528,6 +545,9 @@ func (f *flusher) hasPreReqs(tt token, dkeys docKeys) (prereqs, found bool) {
 NextDoc:
 	for _, dkey := range dkeys {
 		for _, dtt := range f.queue[dkey] {
+			if dtt.id != dtt.tt.id() {
+				panic(fmt.Sprintf("%s => %v did not create %v", dtt.tt, dtt.tt.id(), dtt.id))
+			}
 			if dtt.tt == tt {
 				continue NextDoc
 			} else if dtt.id != ttId {
@@ -930,6 +950,9 @@ func tokensToPull(dqueue []tokenAndId, pull map[bson.ObjectId]*transaction, dont
 	var result []token
 	for j := len(dqueue) - 1; j >= 0; j-- {
 		d := dqueue[j]
+		if d.id != d.tt.id() {
+			panic(fmt.Sprintf("%s => %v did not create %v", d.tt, d.tt.id(), d.id))
+		}
 		if d.tt == dontPull {
 			continue
 		}
