@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -793,10 +794,11 @@ func (s *S) TestTxnQueueGrowth(c *C) {
 	// (presumably we have to re-apply all of the assertion docs with new
 	// nonces because we didn't get to the point of our nonce winning the 'prepared' battle.
 	// Are they getting re-ordered?
-	txn.SetChaos(txn.Chaos{
-		KillChance: 1,
-		Breakpoint: "set-applying",
-	})
+	// things that don't get to 'prepared' don't get filed away as 'predecessors'.
+	/// txn.SetChaos(txn.Chaos{
+	/// 	KillChance: 1,
+	/// 	Breakpoint: "set-applying",
+	/// })
 	const N = 1000
 	ops := []txn.Op{{
 		C:      "accounts",
@@ -805,13 +807,14 @@ func (s *S) TestTxnQueueGrowth(c *C) {
 	}}
 	for n := 0; n < N; n++ {
 		err = s.runner.Run(ops, "", nil)
-		c.Assert(err, Equals, txn.ErrChaos)
+		c.Assert(err, IsNil)
+		/// c.Assert(err, Equals, txn.ErrChaos)
 	}
 	var qdoc txnQueue
 	err = s.accounts.FindId(0).One(&qdoc)
 	c.Assert(err, IsNil)
 	c.Check(len(qdoc.Queue), Equals, N)
-	c.Logf("took %v to set up %d assertions", time.Since(t), N)
+	fmt.Printf("\ntook %v to set up %d assertions\n", time.Since(t), N)
 	t = time.Now()
 	txn.SetChaos(txn.Chaos{})
 	ops = []txn.Op{{
@@ -819,9 +822,29 @@ func (s *S) TestTxnQueueGrowth(c *C) {
 		Id:     0,
 		Update: M{"$inc": M{"balance": 100}},
 	}}
+	initial := atomic.LoadUint64(&txn.TokenIdCounter)
+	initFP := atomic.LoadUint64(&txn.FastPathReloadQueueIds)
+	initFT := atomic.LoadUint64(&txn.FoundTokenAlready)
+	initFM := atomic.LoadUint64(&txn.FoundMatchingToken)
+	initRS := atomic.LoadUint64(&txn.RescanUpdatedQueue)
+	initRM := atomic.LoadUint64(&txn.RescanMatchingToken)
+	initRQ := atomic.LoadUint64(&txn.RescanDiffQueue)
+	initRNQ := atomic.LoadUint64(&txn.RescanNoQueue)
+	initRTC := atomic.LoadUint64(&txn.RescanTokenCount)
 	err = s.runner.Run(ops, "", nil)
 	c.Assert(err, IsNil)
-	c.Check(nil, NotNil, Commentf("N: %d, applied txn in %v", N, time.Since(t)))
+	fmt.Printf("N: %d, applied txn in %v w/ %d id() lookups, fastpath:%d found:%d found matching:%d rescan:%d rescan matched:%d newQ:%d rescan count:%d no q:%d\n\n",
+		N, time.Since(t),
+		atomic.LoadUint64(&txn.TokenIdCounter) - initial,
+		atomic.LoadUint64(&txn.FastPathReloadQueueIds) - initFP,
+		atomic.LoadUint64(&txn.FoundTokenAlready) - initFT,
+		atomic.LoadUint64(&txn.FoundMatchingToken) - initFM,
+		atomic.LoadUint64(&txn.RescanUpdatedQueue) - initRS,
+		atomic.LoadUint64(&txn.RescanMatchingToken) - initRM,
+		atomic.LoadUint64(&txn.RescanDiffQueue) - initRQ,
+		atomic.LoadUint64(&txn.RescanTokenCount) - initRTC,
+		atomic.LoadUint64(&txn.RescanNoQueue) - initRNQ,
+	)
 	err = s.accounts.FindId(0).One(&qdoc)
 	c.Assert(err, IsNil)
 	c.Check(len(qdoc.Queue), Equals, 1)

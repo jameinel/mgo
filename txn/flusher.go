@@ -2,6 +2,7 @@ package txn
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
@@ -21,25 +22,29 @@ func flush(r *Runner, t *transaction) error {
 	return f.run()
 }
 
-type tokenAndId struct {
-	tt token
-	id bson.ObjectId
-}
-
-func (tid tokenAndId) GoString() string {
-	return string(tid.tt)
-}
-
-func (tid tokenAndId) String() string {
-	return string(tid.tt)
-}
-
 type flusher struct {
 	*Runner
 	goal     *transaction
 	goalKeys map[docKey]bool
 	queue    map[docKey][]tokenAndId
 	debugId  string
+}
+
+type tokenAndId struct {
+	tt  token
+	bid bson.ObjectId
+}
+
+func (ti tokenAndId) id() bson.ObjectId {
+	return ti.bid
+}
+
+func (ti tokenAndId) nonce() string {
+	return ti.tt.nonce()
+}
+
+func (ti tokenAndId) String() string {
+	return string(ti.tt)
 }
 
 func (f *flusher) run() (err error) {
@@ -56,10 +61,6 @@ func (f *flusher) run() (err error) {
 		return nil
 	}
 
-	return f.runGraph(seen)
-}
-
-func (f* flusher) runGraph(seen map[bson.ObjectId]*transaction) (err error) {
 	// Sparse workloads will generally be managed entirely by recurse.
 	// Getting here means one or more transactions have dependencies
 	// and perhaps cycles.
@@ -71,11 +72,8 @@ func (f* flusher) runGraph(seen map[bson.ObjectId]*transaction) (err error) {
 	for _, dqueue := range f.queue {
 	NextPair:
 		for i := 0; i < len(dqueue); i++ {
-			p := dqueue[i]
-			pred, predid := p.tt, p.id
-			if p.id != p.tt.id() {
-				panic(fmt.Sprintf("%s => %v did not create %v", p.tt, p.tt.id(), p.id))
-			}
+			pred := dqueue[i]
+			predid := pred.id()
 			predt := seen[predid]
 			if predt == nil || predt.Nonce != pred.nonce() {
 				continue
@@ -86,11 +84,8 @@ func (f* flusher) runGraph(seen map[bson.ObjectId]*transaction) (err error) {
 			}
 
 			for j := i + 1; j < len(dqueue); j++ {
-				s := dqueue[i]
-				succ, succid := s.tt, s.id
-				if s.id != s.tt.id() {
-					panic(fmt.Sprintf("%s => %v did not create %v", s.tt, s.tt.id(), s.id))
-				}
+				succ := dqueue[j]
+				succid := succ.id()
 				succt := seen[succid]
 				if succt == nil || succt.Nonce != succ.nonce() {
 					continue
@@ -159,10 +154,7 @@ func (f *flusher) recurse(t *transaction, seen map[bson.ObjectId]*transaction) e
 	}
 	for _, dkey := range t.docKeys() {
 		for _, dtt := range f.queue[dkey] {
-			id := dtt.id
-			if id != dtt.tt.id() {
-				panic(fmt.Sprintf("%s => %v did not create %v", dtt.tt, dtt.tt.id(), id))
-			}
+			id := dtt.id()
 			if seen[id] != nil {
 				continue
 			}
@@ -238,6 +230,16 @@ var txnFields = bson.D{{"txn-queue", 1}, {"txn-revno", 1}, {"txn-remove", 1}, {"
 
 var errPreReqs = fmt.Errorf("transaction has pre-requisites and force is false")
 
+var FastPathReloadQueueIds uint64
+var FoundTokenAlready uint64
+var FoundMatchingToken uint64
+var RescanUpdatedQueue uint64
+var RescanMatchingToken uint64
+var RescanDiffQueue uint64
+var RescanTokenCount uint64
+var RescanNoQueue uint64
+
+
 // prepare injects t's id onto txn-queue for all affected documents
 // and collects the current txn-queue and txn-revno values during
 // the process. If the prepared txn-queue indicates that there are
@@ -273,7 +275,9 @@ NextDoc:
 			if info.Remove == "" {
 				// Fast path, unless workload is insert/remove heavy.
 				revno[dkey] = info.Revno
-				f.queue[dkey] = tokensWithIds(info.Queue)
+				// We updated the Q, so this should force refresh
+				// TODO: We could *just* add the new txn-queue entry/reuse existing tokens
+				f.queue[dkey] = tokensWithIds(info.Queue, &FastPathReloadQueueIds)
 				f.debugf("[A] Prepared document %v with revno %d and queue: %v", dkey, info.Revno, info.Queue)
 				continue NextDoc
 			} else {
@@ -334,8 +338,15 @@ NextDoc:
 				} else {
 					f.debugf("[B] Prepared document %v with revno %d and queue: %v", dkey, info.Revno, info.Queue)
 				}
-				revno[dkey] = info.Revno
-				f.queue[dkey] = tokensWithIds(info.Queue)
+				existRevno, rok := revno[dkey]
+				existQ, qok := f.queue[dkey]
+				if rok && qok && existRevno == info.Revno && len(existQ) == len(info.Queue) {
+					// We've already loaded this doc, no need to load it again
+					atomic.AddUint64(&FoundMatchingToken, 1)
+				} else {
+					revno[dkey] = info.Revno
+					f.queue[dkey] = tokensWithIds(info.Queue, &FoundTokenAlready)
+				}
 				continue NextDoc
 			}
 		}
@@ -396,6 +407,16 @@ func (f *flusher) unstashToken(tt token, dkey docKey) error {
 		return err
 	}
 	return nil
+}
+
+func tokensWithIds(q []token, rationale *uint64) []tokenAndId {
+	out := make([]tokenAndId, len(q))
+	for i, tt := range q {
+		out[i].tt = tt
+		out[i].bid = tt.id()
+	}
+	atomic.AddUint64(rationale, 1)
+	return out
 }
 
 func (f *flusher) rescan(t *transaction, force bool) (revnos []int64, err error) {
@@ -469,7 +490,9 @@ func (f *flusher) rescan(t *transaction, force bool) (revnos []int64, err error)
 			goto RetryDoc
 		}
 		revno[dkey] = info.Revno
-
+		// TODO(jam): 2017-05-31: linear search for each token in info.Queue during all rescans is potentially O(N^2)
+		// if we first checked to see that we've already loaded this info.Queue in f.queue, we could use a different
+		// structure (map) to do faster lookups to see if the tokens are already present.
 		found := false
 		for _, id := range info.Queue {
 			if id == tt {
@@ -477,7 +500,20 @@ func (f *flusher) rescan(t *transaction, force bool) (revnos []int64, err error)
 				break
 			}
 		}
-		f.queue[dkey] = tokensWithIds(info.Queue)
+		existQ, qok := f.queue[dkey]
+		if !qok {
+			atomic.AddUint64(&RescanNoQueue, 1)
+		}
+		if qok && len(existQ) == len(info.Queue) {
+			// we could check that info.Q matches existQ.tt
+			atomic.AddUint64(&RescanMatchingToken, 1)
+		} else {
+			if len(existQ) != len(info.Queue) {
+				atomic.AddUint64(&RescanDiffQueue, 1)
+			}
+			atomic.AddUint64(&RescanTokenCount, uint64(len(info.Queue)))
+			f.queue[dkey] = tokensWithIds(info.Queue, &RescanUpdatedQueue)
+		}
 		if !found {
 			// Rescanned transaction id was not in the queue. This could mean one
 			// of three things:
@@ -545,12 +581,9 @@ func (f *flusher) hasPreReqs(tt token, dkeys docKeys) (prereqs, found bool) {
 NextDoc:
 	for _, dkey := range dkeys {
 		for _, dtt := range f.queue[dkey] {
-			if dtt.id != dtt.tt.id() {
-				panic(fmt.Sprintf("%s => %v did not create %v", dtt.tt, dtt.tt.id(), dtt.id))
-			}
 			if dtt.tt == tt {
 				continue NextDoc
-			} else if dtt.id != ttId {
+			} else if dtt.id() != ttId {
 				prereqs = true
 			}
 		}
@@ -938,28 +971,17 @@ func (f *flusher) apply(t *transaction, pull map[bson.ObjectId]*transaction) err
 	return nil
 }
 
-func tokensWithIds(justToken []token) []tokenAndId {
-	res := make([]tokenAndId, len(justToken))
-	for i, tt := range justToken {
-		res[i] = tokenAndId{tt, tt.id()}
-	}
-	return res
-}
-
 func tokensToPull(dqueue []tokenAndId, pull map[bson.ObjectId]*transaction, dontPull token) []token {
 	var result []token
 	for j := len(dqueue) - 1; j >= 0; j-- {
-		d := dqueue[j]
-		if d.id != d.tt.id() {
-			panic(fmt.Sprintf("%s => %v did not create %v", d.tt, d.tt.id(), d.id))
-		}
-		if d.tt == dontPull {
+		dtt := dqueue[j]
+		if dtt.tt == dontPull {
 			continue
 		}
-		if _, ok := pull[d.id]; ok {
+		if _, ok := pull[dtt.bid]; ok {
 			// It was handled before and this is a leftover invalid
 			// nonce in the queue. Cherry-pick it out.
-			result = append(result, d.tt)
+			result = append(result, dtt.tt)
 		}
 	}
 	return result

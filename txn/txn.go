@@ -143,7 +143,7 @@ func (tt token) id() bson.ObjectId {
 	atomic.AddUint64(&TokenIdCounter, 1)
 	return bson.ObjectIdHex(string(tt[:24]))
 }
-func (tt token) nonce() string     { return string(tt[25:]) }
+func (tt token) nonce() string { return string(tt[25:]) }
 
 // Op represents an operation to a single document that may be
 // applied as part of a transaction with other operations.
