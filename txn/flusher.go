@@ -12,7 +12,7 @@ func flush(r *Runner, t *transaction) error {
 		Runner:   r,
 		goal:     t,
 		goalKeys: make(map[docKey]bool),
-		queue:    make(map[docKey][]token),
+		queue:    make(map[docKey][]tokenAndId),
 		debugId:  debugPrefix(),
 	}
 	for _, dkey := range f.goal.docKeys() {
@@ -21,11 +21,16 @@ func flush(r *Runner, t *transaction) error {
 	return f.run()
 }
 
+type tokenAndId struct {
+	tt token
+	id bson.ObjectId
+}
+
 type flusher struct {
 	*Runner
 	goal     *transaction
 	goalKeys map[docKey]bool
-	queue    map[docKey][]token
+	queue    map[docKey][]tokenAndId
 	debugId  string
 }
 
@@ -43,6 +48,10 @@ func (f *flusher) run() (err error) {
 		return nil
 	}
 
+	return f.runGraph(seen)
+}
+
+func (f* flusher) runGraph(seen map[bson.ObjectId]*transaction) (err error) {
 	// Sparse workloads will generally be managed entirely by recurse.
 	// Getting here means one or more transactions have dependencies
 	// and perhaps cycles.
@@ -54,8 +63,8 @@ func (f *flusher) run() (err error) {
 	for _, dqueue := range f.queue {
 	NextPair:
 		for i := 0; i < len(dqueue); i++ {
-			pred := dqueue[i]
-			predid := pred.id()
+			p := dqueue[i]
+			pred, predid := p.tt, p.id
 			predt := seen[predid]
 			if predt == nil || predt.Nonce != pred.nonce() {
 				continue
@@ -66,8 +75,8 @@ func (f *flusher) run() (err error) {
 			}
 
 			for j := i + 1; j < len(dqueue); j++ {
-				succ := dqueue[j]
-				succid := succ.id()
+				s := dqueue[i]
+				succ, succid := s.tt, s.id
 				succt := seen[succid]
 				if succt == nil || succt.Nonce != succ.nonce() {
 					continue
@@ -136,7 +145,7 @@ func (f *flusher) recurse(t *transaction, seen map[bson.ObjectId]*transaction) e
 	}
 	for _, dkey := range t.docKeys() {
 		for _, dtt := range f.queue[dkey] {
-			id := dtt.id()
+			id := dtt.id
 			if seen[id] != nil {
 				continue
 			}
@@ -247,7 +256,7 @@ NextDoc:
 			if info.Remove == "" {
 				// Fast path, unless workload is insert/remove heavy.
 				revno[dkey] = info.Revno
-				f.queue[dkey] = info.Queue
+				f.queue[dkey] = tokensWithIds(info.Queue)
 				f.debugf("[A] Prepared document %v with revno %d and queue: %v", dkey, info.Revno, info.Queue)
 				continue NextDoc
 			} else {
@@ -309,7 +318,7 @@ NextDoc:
 					f.debugf("[B] Prepared document %v with revno %d and queue: %v", dkey, info.Revno, info.Queue)
 				}
 				revno[dkey] = info.Revno
-				f.queue[dkey] = info.Queue
+				f.queue[dkey] = tokensWithIds(info.Queue)
 				continue NextDoc
 			}
 		}
@@ -451,7 +460,7 @@ func (f *flusher) rescan(t *transaction, force bool) (revnos []int64, err error)
 				break
 			}
 		}
-		f.queue[dkey] = info.Queue
+		f.queue[dkey] = tokensWithIds(info.Queue)
 		if !found {
 			// Rescanned transaction id was not in the queue. This could mean one
 			// of three things:
@@ -515,12 +524,13 @@ func assembledRevnos(ops []Op, revno map[docKey]int64) []int64 {
 
 func (f *flusher) hasPreReqs(tt token, dkeys docKeys) (prereqs, found bool) {
 	found = true
+	ttId := tt.id()
 NextDoc:
 	for _, dkey := range dkeys {
 		for _, dtt := range f.queue[dkey] {
-			if dtt == tt {
+			if dtt.tt == tt {
 				continue NextDoc
-			} else if dtt.id() != tt.id() {
+			} else if dtt.id != ttId {
 				prereqs = true
 			}
 		}
@@ -908,17 +918,25 @@ func (f *flusher) apply(t *transaction, pull map[bson.ObjectId]*transaction) err
 	return nil
 }
 
-func tokensToPull(dqueue []token, pull map[bson.ObjectId]*transaction, dontPull token) []token {
+func tokensWithIds(justToken []token) []tokenAndId {
+	res := make([]tokenAndId, len(justToken))
+	for i, tt := range justToken {
+		res[i] = tokenAndId{tt, tt.id()}
+	}
+	return res
+}
+
+func tokensToPull(dqueue []tokenAndId, pull map[bson.ObjectId]*transaction, dontPull token) []token {
 	var result []token
 	for j := len(dqueue) - 1; j >= 0; j-- {
-		dtt := dqueue[j]
-		if dtt == dontPull {
+		d := dqueue[j]
+		if d.tt == dontPull {
 			continue
 		}
-		if _, ok := pull[dtt.id()]; ok {
+		if _, ok := pull[d.id]; ok {
 			// It was handled before and this is a leftover invalid
 			// nonce in the queue. Cherry-pick it out.
-			result = append(result, dtt)
+			result = append(result, d.tt)
 		}
 	}
 	return result

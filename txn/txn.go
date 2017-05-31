@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
@@ -136,7 +137,12 @@ func newNonce() string {
 
 type token string
 
-func (tt token) id() bson.ObjectId { return bson.ObjectIdHex(string(tt[:24])) }
+var TokenIdCounter uint64
+
+func (tt token) id() bson.ObjectId {
+	atomic.AddUint64(&TokenIdCounter, 1)
+	return bson.ObjectIdHex(string(tt[:24]))
+}
 func (tt token) nonce() string     { return string(tt[25:]) }
 
 // Op represents an operation to a single document that may be
