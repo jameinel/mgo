@@ -152,15 +152,31 @@ func (f *flusher) recurse(t *transaction, seen map[bson.ObjectId]*transaction) e
 	if err != errPreReqs {
 		return err
 	}
+	toPreload := make([]bson.ObjectId, 0)
 	for _, dkey := range t.docKeys() {
+		toPreload = toPreload[:0]
 		for _, dtt := range f.queue[dkey] {
 			id := dtt.id()
 			if seen[id] != nil {
 				continue
 			}
-			qt, err := f.load(id)
-			if err != nil {
-				return err
+			toPreload = append(toPreload, id)
+		}
+		preloaded, err := f.loadMulti(toPreload)
+		if err != nil {
+			return err
+		}
+		for _, dtt := range f.queue[dkey] {
+			id := dtt.id()
+			if seen[id] != nil {
+				continue
+			}
+			qt, ok := preloaded[id]
+			if !ok {
+				qt, err = f.load(id)
+				if err != nil {
+					return err
+				}
 			}
 			err = f.recurse(qt, seen)
 			if err != nil {

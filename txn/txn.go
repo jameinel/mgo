@@ -468,6 +468,27 @@ func (r *Runner) load(id bson.ObjectId) (*transaction, error) {
 	return &t, nil
 }
 
+func (r *Runner) loadMulti(ids []bson.ObjectId) (map[bson.ObjectId]*transaction, error) {
+	txns := make([]transaction, 0, len(ids))
+	txnMap := make(map[bson.ObjectId]*transaction, len(ids))
+
+	atomic.AddUint64(&TxnLoadCalls, 1)
+	query := r.tc.Find(bson.M{"_id": bson.M{"$in": ids}})
+	// Not sure that this actually has much of an effect when using All()
+	query.Batch(len(ids))
+	err := query.All(&txns)
+	if err == mgo.ErrNotFound {
+		return nil, fmt.Errorf("could not find a transaction in batch: %v", ids)
+	} else if err != nil {
+		return nil, err
+	}
+	for i := range txns {
+		t := &txns[i]
+		txnMap[t.Id] = t
+	}
+	return txnMap, nil
+}
+
 type typeNature int
 
 const (
