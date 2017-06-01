@@ -162,10 +162,12 @@ func (f *flusher) recurse(t *transaction, seen map[bson.ObjectId]*transaction) e
 			}
 			toPreload = append(toPreload, id)
 		}
+		var preloaded map[bson.ObjectId]*transaction
 		preloaded, err := f.loadMulti(toPreload)
 		if err != nil {
 			return err
 		}
+		atomic.AddUint64(&PreloadedCount, uint64(len(preloaded)))
 		for _, dtt := range f.queue[dkey] {
 			id := dtt.id()
 			if seen[id] != nil {
@@ -254,6 +256,7 @@ var RescanMatchingToken uint64
 var RescanDiffQueue uint64
 var RescanTokenCount uint64
 var RescanNoQueue uint64
+var PreloadedCount uint64
 
 // prepare injects t's id onto txn-queue for all affected documents
 // and collects the current txn-queue and txn-revno values during

@@ -706,6 +706,7 @@ func (s *S) TestPurgeMissingPipelineSizeLimit(c *C) {
 }
 
 var flaky = flag.Bool("flaky", false, "Include flaky tests")
+var txnQueueLength = flag.Int("qlength", 100, "txn-queue length for recovery tests")
 
 func (s *S) TestTxnQueueStressTest(c *C) {
 	// This fails about 20% of the time on Mongo 3.2 (I haven't tried
@@ -862,6 +863,77 @@ func (s *S) TestTxnQueueGrowth(c *C) {
 		atomic.LoadUint64(&txn.RescanTokenCount)-initRTC,
 		atomic.LoadUint64(&txn.RescanNoQueue)-initRNQ,
 		atomic.LoadUint64(&txn.TxnLoadCalls)-initTL,
+	)
+	err = s.accounts.FindId(0).One(&qdoc)
+	c.Assert(err, IsNil)
+	c.Check(len(qdoc.Queue), Equals, 1)
+}
+
+func (s *S) TestTxnQueueRecovery(c *C) {
+	txn.SetDebug(false) // too much spam
+	badTxnToken := "123456789012345678901234_deadbeef"
+	err := s.accounts.Insert(M{"_id": 0, "balance": 0, "txn-queue": []string{badTxnToken}})
+	c.Assert(err, IsNil)
+	t := time.Now()
+	initTL := atomic.LoadUint64(&txn.TxnLoadCalls)
+	initPL := atomic.LoadUint64(&txn.PreloadedCount)
+	ops := []txn.Op{{
+		C:      "accounts",
+		Id:     0,
+		Update: M{"$set": M{"balance": 0}},
+	}}
+	errString := `cannot find transaction ObjectIdHex("123456789012345678901234")`
+	for n := 0; n < *txnQueueLength; n++ {
+		err = s.runner.Run(ops, "", nil)
+		c.Assert(err.Error(), Equals, errString)
+	}
+	var qdoc txnQueue
+	err = s.accounts.FindId(0).One(&qdoc)
+	c.Assert(err, IsNil)
+	c.Check(len(qdoc.Queue), Equals, *txnQueueLength+1)
+	fmt.Printf("\ntook %v to set up %d txns, %d loads %d txns preloaded\n", time.Since(t), *txnQueueLength,
+		atomic.LoadUint64(&txn.TxnLoadCalls)-initTL,
+		atomic.LoadUint64(&txn.PreloadedCount)-initPL,
+	)
+	t = time.Now()
+	s.accounts.UpdateId(0, bson.M{"$pullAll": bson.M{"txn-queue": []string{badTxnToken}}})
+	ops = []txn.Op{{
+		C:      "accounts",
+		Id:     0,
+		Update: M{"$inc": M{"balance": 100}},
+	}}
+	initial := atomic.LoadUint64(&txn.TokenIdCounter)
+	initFP := atomic.LoadUint64(&txn.FastPathReloadQueueIds)
+	initFT := atomic.LoadUint64(&txn.FoundTokenAlready)
+	initFM := atomic.LoadUint64(&txn.FoundMatchingToken)
+	initRS := atomic.LoadUint64(&txn.RescanUpdatedQueue)
+	initRM := atomic.LoadUint64(&txn.RescanMatchingToken)
+	initRQ := atomic.LoadUint64(&txn.RescanDiffQueue)
+	initRNQ := atomic.LoadUint64(&txn.RescanNoQueue)
+	initRTC := atomic.LoadUint64(&txn.RescanTokenCount)
+	initTL = atomic.LoadUint64(&txn.TxnLoadCalls)
+	initPL = atomic.LoadUint64(&txn.TxnLoadCalls)
+	// f, err := os.Create("apply.pprof")
+	// c.Assert(err, IsNil)
+	// defer f.Close()
+	// pprof.StartCPUProfile(f)
+	err = s.runner.Run(ops, "", nil)
+	// pprof.StopCPUProfile()
+	c.Assert(err, IsNil)
+	fmt.Printf("N: %d, applied txn in %v w/ %d id() lookups, fastpath:%d\n"+
+		"     found:%d found matching:%d rescan:%d rescan matched:%d newQ:%d rescan count:%d no q:%d txn loads: %d preloaded: %d\n\n",
+		*txnQueueLength, time.Since(t),
+		atomic.LoadUint64(&txn.TokenIdCounter)-initial,
+		atomic.LoadUint64(&txn.FastPathReloadQueueIds)-initFP,
+		atomic.LoadUint64(&txn.FoundTokenAlready)-initFT,
+		atomic.LoadUint64(&txn.FoundMatchingToken)-initFM,
+		atomic.LoadUint64(&txn.RescanUpdatedQueue)-initRS,
+		atomic.LoadUint64(&txn.RescanMatchingToken)-initRM,
+		atomic.LoadUint64(&txn.RescanDiffQueue)-initRQ,
+		atomic.LoadUint64(&txn.RescanTokenCount)-initRTC,
+		atomic.LoadUint64(&txn.RescanNoQueue)-initRNQ,
+		atomic.LoadUint64(&txn.TxnLoadCalls)-initTL,
+		atomic.LoadUint64(&txn.PreloadedCount)-initPL,
 	)
 	err = s.accounts.FindId(0).One(&qdoc)
 	c.Assert(err, IsNil)
