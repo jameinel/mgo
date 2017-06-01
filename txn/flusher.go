@@ -52,9 +52,11 @@ func (f *flusher) run() (err error) {
 		defer f.handleChaos(&err)
 	}
 
+	atomic.AddUint64(&RunCalls, 1)
 	f.debugf("Processing %s", f.goal)
 	seen := make(map[bson.ObjectId]*transaction)
-	if err := f.recurse(f.goal, seen); err != nil {
+	preloaded := make(map[bson.ObjectId]*transaction)
+	if err := f.recurse(f.goal, seen, preloaded); err != nil {
 		return err
 	}
 	if f.goal.done() {
@@ -146,8 +148,11 @@ func (f *flusher) run() (err error) {
 	return nil
 }
 
-func (f *flusher) recurse(t *transaction, seen map[bson.ObjectId]*transaction) error {
+func (f *flusher) recurse(t *transaction, seen map[bson.ObjectId]*transaction, preloaded map[bson.ObjectId]*transaction) error {
+	atomic.AddUint64(&RecurseCalls, 1)
 	seen[t.Id] = t
+	// we shouldn't need this one anymore because we are processing it now
+	// delete(preloaded, t.Id)
 	err := f.advance(t, nil, false)
 	if err != errPreReqs {
 		return err
@@ -157,17 +162,17 @@ func (f *flusher) recurse(t *transaction, seen map[bson.ObjectId]*transaction) e
 		toPreload = toPreload[:0]
 		for _, dtt := range f.queue[dkey] {
 			id := dtt.id()
-			if seen[id] != nil {
+			if seen[id] != nil || preloaded[id] != nil {
 				continue
 			}
 			toPreload = append(toPreload, id)
 		}
-		var preloaded map[bson.ObjectId]*transaction
-		preloaded, err := f.loadMulti(toPreload)
-		if err != nil {
-			return err
+
+		if len(toPreload) > 0 {
+			if err := f.loadMulti(toPreload, preloaded); err != nil {
+				return err
+			}
 		}
-		atomic.AddUint64(&PreloadedCount, uint64(len(preloaded)))
 		for _, dtt := range f.queue[dkey] {
 			id := dtt.id()
 			if seen[id] != nil {
@@ -180,7 +185,7 @@ func (f *flusher) recurse(t *transaction, seen map[bson.ObjectId]*transaction) e
 					return err
 				}
 			}
-			err = f.recurse(qt, seen)
+			err = f.recurse(qt, seen, preloaded)
 			if err != nil {
 				return err
 			}
@@ -251,6 +256,8 @@ var errPreReqs = fmt.Errorf("transaction has pre-requisites and force is false")
 var FastPathReloadQueueIds uint64
 var FoundTokenAlready uint64
 var FoundMatchingToken uint64
+var RunCalls uint64
+var RecurseCalls uint64
 var RescanUpdatedQueue uint64
 var RescanMatchingToken uint64
 var RescanDiffQueue uint64

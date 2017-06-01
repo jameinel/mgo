@@ -3,8 +3,8 @@ package txn_test
 import (
 	"flag"
 	"fmt"
-	// 	"os"
-	// 	"runtime/pprof"
+	"os"
+	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -912,16 +912,18 @@ func (s *S) TestTxnQueueRecovery(c *C) {
 	initRNQ := atomic.LoadUint64(&txn.RescanNoQueue)
 	initRTC := atomic.LoadUint64(&txn.RescanTokenCount)
 	initTL = atomic.LoadUint64(&txn.TxnLoadCalls)
-	initPL = atomic.LoadUint64(&txn.TxnLoadCalls)
-	// f, err := os.Create("apply.pprof")
-	// c.Assert(err, IsNil)
-	// defer f.Close()
-	// pprof.StartCPUProfile(f)
+	initPL = atomic.LoadUint64(&txn.PreloadedCount)
+	initRC := atomic.LoadUint64(&txn.RecurseCalls)
+	initRunC := atomic.LoadUint64(&txn.RunCalls)
+	f, err := os.Create("recovery.pprof")
+	c.Assert(err, IsNil)
+	defer f.Close()
+	pprof.StartCPUProfile(f)
 	err = s.runner.Run(ops, "", nil)
-	// pprof.StopCPUProfile()
+	pprof.StopCPUProfile()
 	c.Assert(err, IsNil)
 	fmt.Printf("N: %d, applied txn in %v w/ %d id() lookups, fastpath:%d\n"+
-		"     found:%d found matching:%d rescan:%d rescan matched:%d newQ:%d rescan count:%d no q:%d txn loads: %d preloaded: %d\n\n",
+		"     found:%d found matching:%d rescan:%d rescan matched:%d newQ:%d rescan count:%d no q:%d txn loads:%d preloaded:%d recurse calls:%d run calls:%d\n\n",
 		*txnQueueLength, time.Since(t),
 		atomic.LoadUint64(&txn.TokenIdCounter)-initial,
 		atomic.LoadUint64(&txn.FastPathReloadQueueIds)-initFP,
@@ -934,6 +936,8 @@ func (s *S) TestTxnQueueRecovery(c *C) {
 		atomic.LoadUint64(&txn.RescanNoQueue)-initRNQ,
 		atomic.LoadUint64(&txn.TxnLoadCalls)-initTL,
 		atomic.LoadUint64(&txn.PreloadedCount)-initPL,
+		atomic.LoadUint64(&txn.RecurseCalls)-initRC,
+		atomic.LoadUint64(&txn.RunCalls)-initRunC,
 	)
 	err = s.accounts.FindId(0).One(&qdoc)
 	c.Assert(err, IsNil)

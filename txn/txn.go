@@ -468,9 +468,8 @@ func (r *Runner) load(id bson.ObjectId) (*transaction, error) {
 	return &t, nil
 }
 
-func (r *Runner) loadMulti(ids []bson.ObjectId) (map[bson.ObjectId]*transaction, error) {
+func (r *Runner) loadMulti(ids []bson.ObjectId, preloaded map[bson.ObjectId]*transaction) error {
 	txns := make([]transaction, 0, len(ids))
-	txnMap := make(map[bson.ObjectId]*transaction, len(ids))
 
 	atomic.AddUint64(&TxnLoadCalls, 1)
 	query := r.tc.Find(bson.M{"_id": bson.M{"$in": ids}})
@@ -478,15 +477,16 @@ func (r *Runner) loadMulti(ids []bson.ObjectId) (map[bson.ObjectId]*transaction,
 	query.Batch(len(ids))
 	err := query.All(&txns)
 	if err == mgo.ErrNotFound {
-		return nil, fmt.Errorf("could not find a transaction in batch: %v", ids)
+		return fmt.Errorf("could not find a transaction in batch: %v", ids)
 	} else if err != nil {
-		return nil, err
+		return err
 	}
 	for i := range txns {
 		t := &txns[i]
-		txnMap[t.Id] = t
+		preloaded[t.Id] = t
 	}
-	return txnMap, nil
+	atomic.AddUint64(&PreloadedCount, uint64(len(txns)))
+	return nil
 }
 
 type typeNature int
