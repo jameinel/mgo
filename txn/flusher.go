@@ -152,7 +152,7 @@ func (f *flusher) recurse(t *transaction, seen map[bson.ObjectId]*transaction, p
 	atomic.AddUint64(&RecurseCalls, 1)
 	seen[t.Id] = t
 	// we shouldn't need this one anymore because we are processing it now
-	// delete(preloaded, t.Id)
+	delete(preloaded, t.Id)
 	err := f.advance(t, nil, false)
 	if err != errPreReqs {
 		return err
