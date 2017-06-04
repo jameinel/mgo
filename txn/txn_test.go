@@ -804,8 +804,8 @@ func (s *S) TestTxnQueueAssertionGrowth(c *C) {
 	err = s.accounts.FindId(0).One(&qdoc)
 	c.Assert(err, IsNil)
 	c.Check(len(qdoc.Queue), Equals, *txnQueueLength)
-	fmt.Printf("\ntook %v to set up %d assertions %d loads of %d txns\n",
-		time.Since(t), *txnQueueLength,
+	fmt.Printf("\n%8.3fs to set up %d assertions %d loads of %d txns\n",
+		time.Since(t).Seconds(), *txnQueueLength,
 		atomic.LoadUint64(&txn.TxnLoadCalls)-initTL,
 		atomic.LoadUint64(&txn.PreloadedCount)-initPL,
 	)
@@ -830,9 +830,10 @@ func (s *S) TestTxnQueueAssertionGrowth(c *C) {
 	initRC := atomic.LoadUint64(&txn.RecurseCalls)
 	initRunC := atomic.LoadUint64(&txn.RunCalls)
 	err = s.runner.Run(ops, "", nil)
-	fmt.Printf("N: %d, applied txn in %v w/ %d id() lookups, fastpath:%d\n"+
-		"     found:%d found matching:%d rescan:%d rescan matched:%d newQ:%d rescan count:%d no q:%d txn loads:%d preloaded:%d recurse calls:%d run calls:%d\n\n",
-		*txnQueueLength, time.Since(t),
+	fmt.Printf("%8.3fs N: %d, applied txn in w/ %d id() lookups, fastpath:%d\n"+
+		"     found:%d found matching:%d rescan:%d rescan matched:%d newQ:%d\n"+
+		"     rescan count:%d no q:%d txn loads:%d preloaded:%d recurse calls:%d run calls:%d\n\n",
+		time.Since(t).Seconds(), *txnQueueLength,
 		atomic.LoadUint64(&txn.TokenIdCounter)-initial,
 		atomic.LoadUint64(&txn.FastPathReloadQueueIds)-initFP,
 		atomic.LoadUint64(&txn.FoundTokenAlready)-initFT,
@@ -874,7 +875,8 @@ func (s *S) TestTxnQueueBrokenPrepared(c *C) {
 	err = s.accounts.FindId(0).One(&qdoc)
 	c.Assert(err, IsNil)
 	c.Check(len(qdoc.Queue), Equals, *txnQueueLength+1)
-	fmt.Printf("\ntook %v to set up %d txns, %d loads %d txns preloaded\n", time.Since(t), *txnQueueLength,
+	fmt.Printf("\n%8.3fs to set up %d assertions %d loads of %d txns\n",
+			time.Since(t).Seconds(), *txnQueueLength,
 		atomic.LoadUint64(&txn.TxnLoadCalls)-initTL,
 		atomic.LoadUint64(&txn.PreloadedCount)-initPL,
 	)
@@ -899,9 +901,10 @@ func (s *S) TestTxnQueueBrokenPrepared(c *C) {
 	initRC := atomic.LoadUint64(&txn.RecurseCalls)
 	initRunC := atomic.LoadUint64(&txn.RunCalls)
 	err = s.runner.Run(ops, "", nil)
-	fmt.Printf("N: %d, applied txn in %v w/ %d id() lookups, fastpath:%d\n"+
-		"     found:%d found matching:%d rescan:%d rescan matched:%d newQ:%d rescan count:%d no q:%d txn loads:%d preloaded:%d recurse calls:%d run calls:%d\n\n",
-		*txnQueueLength, time.Since(t),
+	fmt.Printf("%8.3fs N: %d, applied txn w/ %d id() lookups, fastpath:%d\n"+
+		"     found:%d found matching:%d rescan:%d rescan matched:%d newQ:%d\n"+
+		"     rescan count:%d no q:%d txn loads:%d preloaded:%d recurse calls:%d run calls:%d\n\n",
+		time.Since(t).Seconds(), *txnQueueLength,
 		atomic.LoadUint64(&txn.TokenIdCounter)-initial,
 		atomic.LoadUint64(&txn.FastPathReloadQueueIds)-initFP,
 		atomic.LoadUint64(&txn.FoundTokenAlready)-initFT,
@@ -945,7 +948,8 @@ func (s *S) TestTxnQueueBrokenPreparing(c *C) {
 	err = s.accounts.FindId(0).One(&qdoc)
 	c.Assert(err, IsNil)
 	c.Check(len(qdoc.Queue), Equals, *txnQueueLength)
-	fmt.Printf("\ntook %v to set up %d txns, %d loads %d txns preloaded\n", time.Since(t), *txnQueueLength,
+	fmt.Printf("\n%8.3fs to set up %d assertions %d loads of %d txns\n",
+			time.Since(t).Seconds(), *txnQueueLength,
 		atomic.LoadUint64(&txn.TxnLoadCalls)-initTL,
 		atomic.LoadUint64(&txn.PreloadedCount)-initPL,
 	)
@@ -965,9 +969,10 @@ func (s *S) TestTxnQueueBrokenPreparing(c *C) {
 	initRC := atomic.LoadUint64(&txn.RecurseCalls)
 	initRunC := atomic.LoadUint64(&txn.RunCalls)
 	err = s.runner.ResumeAll()
-	fmt.Printf("N: %d, applied txn in %v w/ %d id() lookups, fastpath:%d\n"+
-		"     found:%d found matching:%d rescan:%d rescan matched:%d newQ:%d rescan count:%d no q:%d txn loads:%d preloaded:%d recurse calls:%d run calls:%d\n\n",
-		*txnQueueLength, time.Since(t),
+	fmt.Printf("%8.3fs N: %d, applied txn w/ %d id() lookups, fastpath:%d\n"+
+		"     found:%d found matching:%d rescan:%d rescan matched:%d newQ:%d\n"+
+		"     rescan count:%d no q:%d txn loads:%d preloaded:%d recurse calls:%d run calls:%d\n\n",
+		time.Since(t).Seconds(), *txnQueueLength,
 		atomic.LoadUint64(&txn.TokenIdCounter)-initial,
 		atomic.LoadUint64(&txn.FastPathReloadQueueIds)-initFP,
 		atomic.LoadUint64(&txn.FoundTokenAlready)-initFT,
@@ -984,5 +989,9 @@ func (s *S) TestTxnQueueBrokenPreparing(c *C) {
 	)
 	err = s.accounts.FindId(0).One(&qdoc)
 	c.Assert(err, IsNil)
-	c.Check(len(qdoc.Queue), Equals, 1)
+	expectedCount := 100
+	if *txnQueueLength <= expectedCount {
+		expectedCount = *txnQueueLength - 1
+	}
+	c.Check(len(qdoc.Queue), Equals, expectedCount)
 }
