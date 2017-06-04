@@ -3,6 +3,8 @@ package txn_test
 import (
 	"flag"
 	"fmt"
+	"os"
+	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -900,7 +902,14 @@ func (s *S) TestTxnQueueBrokenPrepared(c *C) {
 	initPL = atomic.LoadUint64(&txn.PreloadedCount)
 	initRC := atomic.LoadUint64(&txn.RecurseCalls)
 	initRunC := atomic.LoadUint64(&txn.RunCalls)
-	err = s.runner.Run(ops, "", nil)
+	f, err := os.Create("resume-all.pprof")
+	c.Assert(err, IsNil)
+	defer f.Close()
+	err = pprof.StartCPUProfile(f)
+	c.Assert(err, IsNil)
+	err = s.runner.ResumeAll()
+	pprof.StopCPUProfile()
+	c.Assert(err, IsNil)
 	fmt.Printf("%8.3fs N: %d, applied txn w/ %d id() lookups, fastpath:%d\n"+
 		"     found:%d found matching:%d rescan:%d rescan matched:%d newQ:%d\n"+
 		"     rescan count:%d no q:%d txn loads:%d preloaded:%d recurse calls:%d run calls:%d\n\n",
