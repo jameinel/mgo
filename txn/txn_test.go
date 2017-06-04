@@ -876,7 +876,7 @@ func (s *S) TestTxnQueueBrokenPrepared(c *C) {
 	c.Assert(err, IsNil)
 	c.Check(len(qdoc.Queue), Equals, *txnQueueLength+1)
 	fmt.Printf("\n%8.3fs to set up %d assertions %d loads of %d txns\n",
-			time.Since(t).Seconds(), *txnQueueLength,
+		time.Since(t).Seconds(), *txnQueueLength,
 		atomic.LoadUint64(&txn.TxnLoadCalls)-initTL,
 		atomic.LoadUint64(&txn.PreloadedCount)-initPL,
 	)
@@ -924,7 +924,7 @@ func (s *S) TestTxnQueueBrokenPrepared(c *C) {
 	c.Check(len(qdoc.Queue), Equals, 1)
 }
 
-func (s *S) TestTxnQueueBrokenPreparing(c *C) {
+func (s *S) TestTxnQueuePreparing(c *C) {
 	txn.SetDebug(false) // too much spam
 	err := s.accounts.Insert(M{"_id": 0, "balance": 0, "txn-queue": []string{}})
 	c.Assert(err, IsNil)
@@ -949,7 +949,7 @@ func (s *S) TestTxnQueueBrokenPreparing(c *C) {
 	c.Assert(err, IsNil)
 	c.Check(len(qdoc.Queue), Equals, *txnQueueLength)
 	fmt.Printf("\n%8.3fs to set up %d assertions %d loads of %d txns\n",
-			time.Since(t).Seconds(), *txnQueueLength,
+		time.Since(t).Seconds(), *txnQueueLength,
 		atomic.LoadUint64(&txn.TxnLoadCalls)-initTL,
 		atomic.LoadUint64(&txn.PreloadedCount)-initPL,
 	)
