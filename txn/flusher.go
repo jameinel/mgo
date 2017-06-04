@@ -148,6 +148,8 @@ func (f *flusher) run() (err error) {
 	return nil
 }
 
+const preloadBatchSize = 100
+
 func (f *flusher) recurse(t *transaction, seen map[bson.ObjectId]*transaction, preloaded map[bson.ObjectId]*transaction) error {
 	atomic.AddUint64(&RecurseCalls, 1)
 	seen[t.Id] = t
@@ -159,35 +161,49 @@ func (f *flusher) recurse(t *transaction, seen map[bson.ObjectId]*transaction, p
 	}
 	toPreload := make([]bson.ObjectId, 0)
 	for _, dkey := range t.docKeys() {
-		toPreload = toPreload[:0]
-		for _, dtt := range f.queue[dkey] {
-			id := dtt.id()
-			if seen[id] != nil || preloaded[id] != nil {
-				continue
-			}
-			toPreload = append(toPreload, id)
-		}
-
-		if len(toPreload) > 0 {
-			if err := f.loadMulti(toPreload, preloaded); err != nil {
-				return err
-			}
-		}
+		queue := f.queue[dkey]
+		remaining := make([]bson.ObjectId, 0, len(queue))
 		for _, dtt := range f.queue[dkey] {
 			id := dtt.id()
 			if seen[id] != nil {
 				continue
 			}
-			qt, ok := preloaded[id]
-			if !ok {
-				qt, err = f.load(id)
-				if err != nil {
+			remaining = append(remaining, id)
+		}
+
+		for len(remaining) > 0 {
+			toPreload = toPreload[:0]
+			batchSize := preloadBatchSize
+			if batchSize > len(remaining) {
+				batchSize = len(remaining)
+			}
+			batch := remaining[:batchSize]
+			remaining = remaining[batchSize:]
+			for _, id := range batch {
+				if preloaded[id] == nil {
+					toPreload = append(toPreload, id)
+				}
+			}
+			if len(toPreload) > 0 {
+				if err := f.loadMulti(toPreload, preloaded); err != nil {
 					return err
 				}
 			}
-			err = f.recurse(qt, seen, preloaded)
-			if err != nil {
-				return err
+			for _, id := range batch {
+				if seen[id] != nil {
+					continue
+				}
+				qt, ok := preloaded[id]
+				if !ok {
+					qt, err = f.load(id)
+					if err != nil {
+						return err
+					}
+				}
+				err = f.recurse(qt, seen, preloaded)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
