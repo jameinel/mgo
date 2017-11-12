@@ -178,6 +178,9 @@ func (f *flusher) advance(t *transaction, pull map[bson.ObjectId]*transaction, f
 		case taborting:
 			return f.abortOrReload(t, nil, pull)
 		case tapplied, taborted:
+			if pull != nil {
+				pull[t.Id] = t
+			}
 			return nil
 		default:
 			panic(fmt.Errorf("transaction in unknown state: %q", t.State))
